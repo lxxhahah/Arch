@@ -1,0 +1,13 @@
+dataset	label	seg_key
+Ocean	pos	A0A832WH15_29_42
+Ocean	pos	A0A832P6X2_46_61
+Ocean	pos	A0A847PQD6_69_76
+Ocean	pos	A0A7J2TJ82_51_56
+Ocean	neg	A0A099SYU6_153_170
+Asgard	pos	A0A524FYS8_64_76
+Asgard	pos	A0A524CYK3_124_135
+Asgard	pos	A0A524CF49_1_12
+Asgard	pos	A0A5C9EGB3_1_15
+Asgard	neg	A0A524MCX9_165_183
+Asgard	neg	A0A842WQJ2_1_17
+

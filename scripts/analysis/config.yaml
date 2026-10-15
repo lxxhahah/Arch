@@ -1,0 +1,18 @@
+# 全蛋白 ESM1b 特征：acc -> embedding / sequence
+esm_h5:
+  Asgard: /path/to/data/Asgard/all_esm1b_dict.h5
+  Ocean: /path/to/data/Ocean/all_esm1b_dict.h5
+
+# 片段推荐结果：acc -> seg -> probability / embedding / segment / sequence
+h5:
+  Asgard: /path/to/data/Asgard/all_result_dict.h5
+  Ocean: /path/to/data/Ocean/all_result_dict.h5
+
+# 输出目录
+data_save_path:
+  Asgard: /path/to/output/data/Asgard
+  Ocean: /path/to/output/data/Ocean
+
+picture_save_path:
+  Asgard: /path/to/output/picture/Asgard
+  Ocean: /path/to/output/picture/Ocean
