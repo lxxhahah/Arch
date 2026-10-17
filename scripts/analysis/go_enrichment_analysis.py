@@ -18,25 +18,25 @@ def plot_go_enrichment(target_df, background_df, save_dir,
                        go_col="Gene Ontology (molecular function)",  
                        top_n=10,
                        figsize = (10, 6),
-                       x_limit=None,     # X轴范围限制，用于将两张图强行对
+                       x_limit=None,     # X-axis limit, used to align the two plots
     ):
 
     # -------------------------
     # Local font config (for GO plot only)
     # -------------------------
-    FS_GO_AXIS_LABEL = 30     # x/y 轴标题
-    FS_GO_TICK = 20           # x/y 轴刻度
-    FS_GO_BAR_TEXT = 15       # 条形右侧数值
-    FS_GO_CBAR_TICK = 30      # colorbar 刻度
+    FS_GO_AXIS_LABEL = 30     # x/y axis title
+    FS_GO_TICK = 20           # x/y tick labels
+    FS_GO_BAR_TEXT = 15       # value text at the right of each bar
+    FS_GO_CBAR_TICK = 30      # colorbar ticks
 
     os.makedirs(save_dir, exist_ok=True)
     
     if 'acc' not in target_df.columns or 'Entry' not in background_df.columns:
-        raise ValueError("target_df 必须包含 'acc' 列，background_df 必须包含 'Entry' 列")
+        raise ValueError("target_df must contain an 'acc' column and background_df must contain an 'Entry' column")
         
     target_acc_list = target_df['acc'].dropna().unique().tolist()
     
-    # 过滤掉没有当前 GO 注释的背景蛋白质
+    # drop background proteins without the current GO annotation
     bg_clean = background_df.dropna(subset=[go_col]).copy()
     
 
@@ -56,11 +56,11 @@ def plot_go_enrichment(target_df, background_df, save_dir,
     target_acc_clean = [acc for acc in target_acc_list if acc in background_acc]
     
     if len(target_acc_clean) == 0:
-        print(f"警告: 在给定的目标集中，没有找到包含 {go_col} 注释的蛋白质！")
+        print(f"Warning: no proteins with the {go_col} annotation were found in the target set!")
         return pd.DataFrame()
 
     # ==========================================
-    # 2. 统计频次
+    # 2. Count frequencies
     # ==========================================
     bg_go_counts = {}
     for terms in bg_clean['go_list']:
@@ -74,15 +74,15 @@ def plot_go_enrichment(target_df, background_df, save_dir,
             target_go_counts[term] = target_go_counts.get(term, 0) + 1
 
     # ==========================================
-    # 3. 超几何分布检验与 FDR 校正
+    # 3. Hypergeometric test and FDR correction
     # ==========================================
-    M = len(background_acc) # 总体大小
-    N = len(target_acc_clean) # 样本大小
+    M = len(background_acc) # population size
+    N = len(target_acc_clean) # sample size
     
     enrichment_results = []
     for go_term, k in target_go_counts.items():
         n = bg_go_counts[go_term]
-        if k < 2: continue # 过滤只出现 1 次的偶发词条
+        if k < 2: continue # drop terms that only appear once
         
         # P-value
         p_value = hypergeom.sf(k - 1, M, n, N)
@@ -100,35 +100,35 @@ def plot_go_enrichment(target_df, background_df, save_dir,
     res_df = pd.DataFrame(enrichment_results)
     
     if res_df.empty:
-        print("没有计算出任何富集结果。")
+        print("No enrichment results were computed.")
         return res_df
         
-    # FDR 多重检验校正
+    # FDR multiple-testing correction
     res_df['FDR'] = multipletests(res_df['P_value'], method='fdr_bh')[1]
-    res_df['-log10(FDR)'] = -np.log10(res_df['FDR'] + 1e-10) # 加上一个极小值防止 log(0)
+    res_df['-log10(FDR)'] = -np.log10(res_df['FDR'] + 1e-10) # add a tiny constant to avoid log(0)
     
 
     # ==========================================
-    # 4. 提取 Top N 准备画图
+    # 4. Extract the Top N for plotting
     # ==========================================
     
-    # 取 P-value 最小的 Top N
+    # take the Top N by smallest P-value
     plot_df = res_df.sort_values('P_value').head(top_n).copy()
     if plot_df.empty:
-        print(f"警告: 经过 FDR < 0.001 过滤后，没有显著的 GO terms!")
+        print(f"Warning: no significant GO terms after FDR < 0.001 filtering!")
         return res_df
     
-    # 条形图需要按 Count 升序排列，这样画出来最长的在最上面
+    # bars must be sorted ascending by Count so the longest is on top
     plot_df = plot_df.sort_values('Count', ascending=True)
   
     max_count = plot_df["Count"].max()
-    # 根据 max_count 自动选择合适的刻度数量和刻度字体大小
-    # 数据集自适应：Asgard 最大值更高，刻度更稀疏
-    if max_count >= 2200:   # Asgard 常见区间
+    # pick tick count and font size based on max_count
+    # dataset-adaptive: Asgard has a higher max, so ticks are sparser
+    if max_count >= 2200:   # common Asgard range
         x_pad_ratio = 1.12
         x_nbins = 4
         fs_tick = 15
-    else:                   # Ocean 常见区间
+    else:                   # common Ocean range
         x_pad_ratio = 1.14
         x_nbins = 5
         fs_tick = 15
@@ -136,33 +136,33 @@ def plot_go_enrichment(target_df, background_df, save_dir,
     plt.figure(figsize=figsize, dpi=600)
     sns.set_theme(style="ticks")
 
-    # 创建一个归一化的颜色映射对象 (映射 Rich Factor)
+    # create a normalized colormap for Rich Factor
     norm = mcolors.Normalize(vmin=plot_df['Rich_Factor'].min(), vmax=plot_df['Rich_Factor'].max())
     cmap = plt.get_cmap('viridis')
 
-    # 绘制水平条形图
+    # draw a horizontal bar chart
     bars = plt.barh(
         y=plot_df['GO_Term'], 
         width=plot_df['Count'], 
         color=cmap(norm(plot_df['Rich_Factor'])), 
         edgecolor='black',
         linewidth=0.8,
-        height=0.7         # 调整柱子的粗细，让它们之间有呼吸感
+        height=0.7         # bar thickness
     )
 
-    # 1) 给右侧留白，避免柱末数字被截断
+    # 1) leave room on the right so bar-end numbers are not clipped
     x_max = plot_df['Count'].max()
     ax = plt.gca()
-    ax.set_xlim(0, x_max * x_pad_ratio)   # 右侧留 18% 空间（可调 1.12~1.25）
-    # 2) 控制 x 轴刻度数量，避免拥挤
+    ax.set_xlim(0, x_max * x_pad_ratio)   # leave 18% space on the right (tunable 1.12~1.25)
+    # 2) limit x-axis tick count to avoid crowding
     ax.xaxis.set_major_locator(MaxNLocator(nbins=x_nbins, integer=True))
-    # 调整字体和网格
+    # adjust fonts and grid
     plt.yticks(fontsize=fs_tick)
     plt.xticks(fontsize=fs_tick)
     # for bar in bars:
     #     width = bar.get_width()
     #     plt.text(
-    #         width + (x_max * 0.01), # 稍微偏右一点点
+    #         width + (x_max * 0.01), # slightly to the right
     #         bar.get_y() + bar.get_height() / 2, 
     #         f'{int(width)}', 
     #         va='center', 
@@ -173,28 +173,28 @@ def plot_go_enrichment(target_df, background_df, save_dir,
     #         clip_on=False
     #     )
 
-    # 添加 Colorbar (代表 Rich Factor)
+    # add a colorbar for Rich Factor
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([]) # 必须加上这句，空数组用于生成 colorbar
+    sm.set_array([]) # required: empty array to build the colorbar
     cbar = plt.colorbar(sm, ax=plt.gca())
     cbar.set_label('Rich Factor', fontsize=FS_GO_BAR_TEXT, fontweight='bold')
     cbar.ax.tick_params(labelsize=FS_GO_CBAR_TICK)
 
-    # 设置坐标文本
+    # set axis labels
     plt.xlabel('Number of Proteins', fontsize=FS_GO_AXIS_LABEL, fontweight='bold')
     plt.ylabel('GO Molecular Function', fontsize=FS_GO_AXIS_LABEL, fontweight='bold')
 
     
-    # X轴加上虚线网格，并将网格置于底层，不遮挡柱子
+    # dashed x-grid placed behind the bars
     plt.grid(axis='x', linestyle='--', alpha=0.6)
     plt.gca().set_axisbelow(True) 
     
-    # 去除上、右边框
+    # remove top/right spines
     sns.despine(top=True, right=True)
 
-    # 给 colorbar 和主图留更稳的布局空间
+    # stable layout space for colorbar and main plot
     plt.tight_layout(rect=[0, 0, 0.965, 1])
-    # 保存图片
+    # save figure
     pic_path = os.path.join(save_dir, "go_enrichment.svg")
     plt.savefig(pic_path, format="svg", bbox_inches='tight', dpi=600)
 
@@ -202,8 +202,8 @@ def plot_go_enrichment(target_df, background_df, save_dir,
 
 def max_local_kr_fraction(sequence, window=15):
     """
-    计算蛋白质序列中局部最高 K/R 密度
-    滑动窗口法：找到 K/R 最密集的 window 个氨基酸窗口
+    Compute the local maximum K/R density of a protein sequence
+    using a sliding window: find the window of `window` residues with the most K/R
     """
     sequence = sequence.upper()
     if not sequence:
@@ -215,7 +215,7 @@ def max_local_kr_fraction(sequence, window=15):
         count=len(sequence),
     )
 
-    # 少于一个完整窗口的蛋白，用整条蛋白计算
+    # for proteins shorter than one window, use the whole sequence
     if len(kr) < window:
         return float(kr.mean())
 
@@ -236,7 +236,7 @@ def adjusted_ribosomal_analysis_model1(
     required = {"Entry", seq_col, go_col}
     missing = required - set(background_df.columns)
     if missing:
-        raise ValueError(f"背景表缺少列: {missing}")
+        raise ValueError(f"background table missing columns: {missing}")
 
     proteins = (
         background_df
@@ -297,9 +297,9 @@ def adjusted_ribosomal_analysis(
     required = {"Entry", seq_col, go_col}
     missing = required - set(background_df.columns)
     if missing:
-        raise ValueError(f"背景表缺少列: {missing}")
+        raise ValueError(f"background table missing columns: {missing}")
 
-    # 与现有 GO 分析一致：只分析有 GO 注释的被筛查蛋白
+    # consistent with the existing GO analysis: only analyze screened proteins with GO annotation
     proteins = (
         background_df
         .dropna(subset=[go_col, seq_col])
@@ -318,12 +318,12 @@ def adjusted_ribosomal_analysis(
         proteins["sequence"].str.count("[KR]") / proteins["length"]
     )
     
-    # 计算局部最高 K/R 密度 (15 aa 窗口)
+    # compute the local max K/R density (15 aa window)
     proteins["max_kr15"] = proteins["sequence"].apply(
         lambda seq: max_local_kr_fraction(seq, window=15)
     )
 
-    # 使用与原 GO 表相同的条目；先按分号拆开，避免模糊匹配
+    # use the same terms as the original GO table; split on semicolons to avoid fuzzy matches
     def has_ribosomal_go(value):
         terms = [
             term.split("[GO:")[0].strip()
@@ -359,7 +359,7 @@ def adjusted_ribosomal_analysis(
 def run_ribosomal_analysis(target_df, background_df, save_dir, data_name,
                            seq_col="Sequence",
                            go_col="Gene Ontology (molecular function)"):
-    """跑两个核糖体 GO 逻辑回归模型(Model 1 / Model 2)，打印摘要并存 TSV。"""
+    """Run the two ribosomal GO logistic-regression models (Model 1 / Model 2), print summaries, and save TSVs."""
     os.makedirs(save_dir, exist_ok=True)
 
     models = [
@@ -378,7 +378,7 @@ def run_ribosomal_analysis(target_df, background_df, save_dir, data_name,
         }
         summaries.append(summary)
         print(
-            f"  {model_label} 调整后核糖体 GO 的 OR = "
+            f"  {model_label} adjusted ribosomal-GO OR = "
             f"{summary['adjusted_OR']:.3f} "
             f"(95% CI {summary['CI_95_low']:.3f}–"
             f"{summary['CI_95_high']:.3f}), "
@@ -392,23 +392,29 @@ def run_ribosomal_analysis(target_df, background_df, save_dir, data_name,
 
 
 def main():
-    """对每个数据集读取高置信度集合 + 物种背景表，跑核糖体 GO 分析。
+    """For each dataset, load the high-confidence set + species background table and run the ribosomal GO analysis.
 
-    运行前请先运行 dual_track_filter.py 生成 high_conf_result.tsv。
+    Run dual_track_filter.py first to produce high_conf_result.tsv.
     """
     for data_name in ["Ocean", "Asgard"]:
         print(f"start GO / ribosomal analysis for {data_name}")
 
         data_save_path = DATA_SAVE_FP_DICT['data_save_path'][data_name]
         picture_save_path = DATA_SAVE_FP_DICT['picture_save_path'][data_name]
-        save_dir = os.path.join(picture_save_path, "or_filter_emb_tsne_2d")
+        save_dir = os.path.join(picture_save_path, "emb_tsne_2d")
 
         target_df = pd.read_csv(os.path.join(data_save_path, "high_conf_result.tsv"), sep="\t")
         background_df = pd.read_csv(
             os.path.join(data_save_path, "species_information", "idmapping.tsv"), sep="\t",
         )
-
-        print("背景表列名：", background_df.columns.tolist())
+        plot_go_enrichment(
+            target_df=target_df,
+            background_df=background_df,
+            save_dir=save_dir,
+            go_col="Gene Ontology (molecular function)",
+            top_n=10,
+        )
+        print("background table columns:", background_df.columns.tolist())
         run_ribosomal_analysis(
             target_df=target_df,
             background_df=background_df,

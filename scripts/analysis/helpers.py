@@ -10,20 +10,19 @@ import yaml
 
 from collections import defaultdict, OrderedDict
 
-# KEY: store full sequence may > 1022, but its embedding <= 1022 -------- first
-# 
-# ---- 路径配置：读取 config.yaml（开源提交占位符，复现者填自己的绝对路径）----
+
+# ---- Path config: reads config.yaml (placeholder paths; fill in your own absolute paths)----
 _CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
 
 with open(_CONFIG_PATH, "r", encoding="utf-8") as _f:
     DATA_SAVE_FP_DICT = yaml.safe_load(_f)
 
-# 实验验证标注（非路径，故存成数据文件，随代码一起提交）
+# Experimental validation labels (not paths, kept as a data file committed with the code)
 EXPERIMENT_LABELS_TSV = Path(__file__).resolve().parent / "experiment_labels.tsv"
 
 
 def load_experiment_labels(tsv_path=EXPERIMENT_LABELS_TSV):
-    """读取实验验证标注 TSV，返回 {dataset: {label: [seg_key, ...]}}。"""
+    """Load experimental validation labels, returning {dataset: {label: [seg_key, ...]}}."""
     df = pd.read_csv(tsv_path, sep="\t")
     result = {}
     for dataset, dg in df.groupby("dataset"):
@@ -37,7 +36,7 @@ def process_row(idx, acc, seg, h5_path, esm_h5_path, emb_flag = False):
     """
     return  (idx, payload_or_None)
         payload = (embedding, esm, seg_key, seg_info) -------  if not emb_flag: embedding & esm is None
-        seg_info = [acc, new_seg, all_sequence, seg_sequence, prob, seg]
+        seg_info = [acc, valid_seg, all_sequence, seg_sequence, prob, seg]
 
     """
     try:
@@ -61,19 +60,19 @@ def process_row(idx, acc, seg, h5_path, esm_h5_path, emb_flag = False):
             seg_sequence = f[acc][seg]["sequence"][()].decode('utf-8')
             prob = float(f[acc][seg]["probability"][()])
 
-            new_seg = seg
+            valid_seg = seg
             if len(seg_sequence) != int(end - start + 1):
                 flag = False
                 if end >= len(all_sequence):
                     flag = True
-                    # new seg !!! 
-                    new_seg = f"{start}_{len(all_sequence)-1}"
+                    # clip end to the valid (in-bounds) coordinate
+                    valid_seg = f"{start}_{len(all_sequence)-1}"
 
                 if not flag:
-                    print(f"{new_seg}, Full len is {len(all_sequence)}")
+                    print(f"{valid_seg}, Full len is {len(all_sequence)}")
 
-            seg_key = f"{acc}_{new_seg}"
-            seg_info = [acc, new_seg, all_sequence, seg_sequence, prob, seg]
+            seg_key = f"{acc}_{valid_seg}"
+            seg_info = [acc, valid_seg, all_sequence, seg_sequence, prob, seg]
 
             return idx, (embedding, esm, seg_key, seg_info)
 
@@ -92,7 +91,7 @@ def load_arch_emb_multiprocess(h5_path, esm_h5_path, recommend_df, emb_flag = Fa
     return:
       all_embeddings: (N, 640) or None
       all_esms: (N, 1280) or None
-      seg_dict: {seg_key: [acc, new_seg, all_sequence, seg_sequence, prob, seg]}
+      seg_dict: {seg_key: [acc, valid_seg, all_sequence, seg_sequence, prob, seg]}
     """
     # recommend_df = (recommend_df
     #                 .sort_values(by=['recommend_prob', 'acc', 'seg'],
@@ -126,8 +125,8 @@ def load_arch_emb_multiprocess(h5_path, esm_h5_path, recommend_df, emb_flag = Fa
     keep = [i for i in range(n) if info_list[i] is not None]
 
     if len(keep) == 0:
-        raise RuntimeError("没有读取到任何有效样本（全部返回 None)。请检查 HDF5 键是否匹配。")
-    print(f"并行读取完成：成功 {len(keep)}/{n} 条。")
+        raise RuntimeError("No valid samples were read (all returned None). Check whether the HDF5 keys match.")
+    print(f"Parallel read done: {len(keep)}/{n} succeeded.")
 
     all_embeddings, all_esms = None, None
 
@@ -143,7 +142,7 @@ def load_arch_emb_multiprocess(h5_path, esm_h5_path, recommend_df, emb_flag = Fa
 
 def get_check_df(h5_path, esm_h5_path, df, num_processes=None):
     """
-        return result_df: "acc", "seg", "prob", "seg_key", "old_seg"
+        return result_df: "acc", "valid_seg", "prob", "seg_key", "seg"
                all_emb,
                all_esm,
                full_seq_dict
@@ -152,7 +151,7 @@ def get_check_df(h5_path, esm_h5_path, df, num_processes=None):
     if num_processes is None:
         num_processes = os.cpu_count()
 
-    print(f"开始使用 {num_processes} 个进程并行读取数据...")   
+    print(f"Reading data in parallel with {num_processes} processes...")   
     all_emb, all_esm, seg_dict = load_arch_emb_multiprocess(h5_path, esm_h5_path, df, emb_flag=True, num_processes=num_processes)
 
     data_rows = []
@@ -160,17 +159,17 @@ def get_check_df(h5_path, esm_h5_path, df, num_processes=None):
     seg_seq_dict = {}   # {Segment_Key: Segment_Sequence}
 
     for seg_key, info_list in seg_dict.items():
-        acc, new_seg, all_sequence, seg_sequence, prob, old_seg = info_list
+        acc, valid_seg, all_sequence, seg_sequence, prob, seg = info_list
 
         full_seq_dict[acc] = all_sequence
         seg_seq_dict[seg_key] = seg_sequence
 
         row = {
             "acc": acc,
-            "seg": new_seg,
+            "valid_seg": valid_seg,
             "seg_key": seg_key,
             "prob": prob,
-            "old_seg": old_seg
+            "seg": seg
         }
         data_rows.append(row)
 

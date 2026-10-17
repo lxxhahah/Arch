@@ -1,7 +1,7 @@
 import os
 import h5py
 from datetime import datetime  
-from multiprocessing import Pool, get_context
+from multiprocessing import get_context
 import subprocess
 import glob
 import warnings
@@ -31,23 +31,25 @@ class ESM:
     
 
     def split_fasta_file(self):
-        """把 fasta 切成若干份用于多进程处理，返回实际生成的子文件列表。"""
-        # 清理上次残留的分片，避免 glob 捡到旧文件
+        """Split the FASTA into chunks for multiprocessing and return the actual chunk files."""
+        # Remove stale split files so glob does not pick them up
         for stale in glob.glob(os.path.join(self.tmp_dir, "fasta_*")):
             os.remove(stale)
 
-        output = subprocess.check_output('wc -l ' + self.fasta, shell=True)
+        output = subprocess.check_output(["wc", "-l", self.fasta])
         lines = int(output.decode().split()[0])
 
-        # 每份行数向上取整到偶数，避免把一个 FASTA 记录从中间切开
+        # Round lines-per-file up to an even number so a FASTA record is never split in half
         lines_per_file = (lines // (self.n * 2) + 1) * 2
-        command = f"split -l {lines_per_file} {self.fasta} -d -a 3 {self.tmp_dir}/fasta_"
-        if os.system(command) != 0:
-            raise RuntimeError(f"split 失败，命令：{command}")
+        subprocess.run(
+            ["split", "-l", str(lines_per_file), self.fasta, "-d", "-a", "3",
+             f"{self.tmp_dir}/fasta_"],
+            check=True,
+        )
 
         split_files = sorted(glob.glob(os.path.join(self.tmp_dir, "fasta_*")))
         if not split_files:
-            raise RuntimeError("split 未生成任何文件")
+            raise RuntimeError("split produced no output files")
         return split_files
 
     def run_esm(self, fasta_file, h5_fp = None):
@@ -65,7 +67,7 @@ class ESM:
 
         hf = None
         if h5_fp is not None:
-            hf = h5py.File(h5_fp, 'a')  # append 模式
+            hf = h5py.File(h5_fp, 'a')  # append mode
             hf.attrs["model_name"] = self.model_location
             hf.attrs["processing_date"] = str(datetime.now())
 
@@ -74,7 +76,7 @@ class ESM:
         with torch.no_grad():
             for batch_idx, (labels, strs, toks) in enumerate(data_loader):
                 toks = toks.to(device=self.device, non_blocking=True)
-                # 获取模型输出（指定第33层）
+                # Get model output from layer 33
                 out = model(toks, repr_layers=[33], return_contacts=False)
                 # for a batch representation  key: "33" value: [batch_size, max_len, 1280]
                 representations = {
@@ -114,7 +116,7 @@ class ESM:
 
         split_files = self.split_fasta_file()
 
-        # 清理上次残留的分片结果，避免 append 模式下重复键
+        # Remove stale per-part outputs to avoid duplicate keys in append mode
         for stale in glob.glob(os.path.join(self.tmp_dir, "part_*.h5")):
             os.remove(stale)
 
@@ -127,7 +129,7 @@ class ESM:
             results.append(pool_runesm.apply_async(self.run_esm, (fasta_file, tmp_h5)))
 
         pool_runesm.close()
-        # 逐个 get() 收集结果，任一 worker 抛异常都会在这里冒出来（不再被静默吞掉）
+        # Collect results via get() so any worker exception surfaces here instead of being silently swallowed
         for r in results:
             r.get()
         pool_runesm.join()
@@ -160,7 +162,8 @@ def generate_accession_index(fasta_fp, idx_fp):
 if __name__ == "__main__":
     model_location = "esm1b_t33_650M_UR50S"
     device = "cuda:0"
-
+    # set n_process > 1 to enable multiprocessing (memory scales linearly with n)
+    n_process = 8
     fasta_fp = "/path/to/proteins.fasta"
     tmp_dir = "/path/to/tmp_dir"
     save_h5_fp = "/path/to/output/all_esm1b_dict.h5"
@@ -168,7 +171,7 @@ if __name__ == "__main__":
     # Generate one-accession-per-line index from the input FASTA
     generate_accession_index(fasta_fp, idx_fp)
 
-    esm_runner = ESM(fasta_fp, tmp_dir, model_location, device, n_process=1)  # n_process>1 启用多进程（内存 ×n）
+    esm_runner = ESM(fasta_fp, tmp_dir, model_location, device, n_process=n_process)  
     print("start to run esm")
     esm_runner.run_esm_multiproc(save_h5_fp)
 

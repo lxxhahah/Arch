@@ -58,7 +58,7 @@ class gnn_classifier(nn.Module):
         emb_li = []
 
         embedding = self.mamb1(embedding)+embedding # additionally Mamba
-        # 逐样本计算
+        # compute per-sample
         for batch_idx in range(batch_size): # actually batch_size = 1
             emb_batch = embedding[batch_idx].unsqueeze(0)  # (1, max_len, 1280)
             segment_batch = segments[batch_idx]  # respond 

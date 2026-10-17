@@ -1,9 +1,9 @@
 """
-Embedding 可视化 (latent space)：
-  读取高置信度集合 high_conf_result.tsv，从 h5 加载模型/ESM embedding，
-  PCA + t-SNE 降到 2D，并绘制按簇 / 概率 / 物种着色的散点图。
+Embedding visualization (latent space):
+  Read the high-confidence set high_conf_result.tsv, load model/ESM embeddings from h5,
+  project to 2D via PCA + t-SNE, and draw scatter plots colored by cluster / probability / species.
 
-运行前请先运行 dual_track_filter.py 生成 high_conf_result.tsv。
+Run dual_track_filter.py first to produce high_conf_result.tsv.
 """
 import os
 
@@ -26,7 +26,7 @@ from sklearn.decomposition import PCA
 from helpers import DATA_SAVE_FP_DICT, get_check_df, parse_cluster_tsv, load_experiment_labels
 
 
-sns.set_style("ticks")         # 使用 ticks 风格，防止覆盖下方字体设置
+sns.set_style("ticks")         # use ticks style to avoid overriding the font settings below
 plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['font.sans-serif'] = ['Arial', 'Helvetica']
 
@@ -34,9 +34,9 @@ plt.rcParams['font.sans-serif'] = ['Arial', 'Helvetica']
 # Global plot style
 # =====================
 
-FS_AXIS_LABEL = 30         # X/Y 轴标题字号
-FS_TICK       = 30        # X/Y 轴刻度数字字号
-FS_LEGEND     = 20       # 图例字号
+FS_AXIS_LABEL = 30         # X/Y axis label font size
+FS_TICK       = 30        # X/Y tick label font size
+FS_LEGEND     = 20       # legend font size
 
 plt.rcParams.update(
     {
@@ -50,12 +50,12 @@ plt.rcParams.update(
 )
 
 # =====================
-# 公共颜色 / 配置
+# Shared colors / config
 # =====================
 
-COLOR_STAR       = '#E63946'   # 实验验证点（唯一主角）
-COLOR_BG         = '#E0E0E0'   # 背景点（浅灰）
-COLOR_BG_LEGEND  = '#C0C0C0'   # 图例中的背景点
+COLOR_STAR       = '#E63946'   # experimentally validated points (the only highlight)
+COLOR_BG         = '#E0E0E0'   # background points (light gray)
+COLOR_BG_LEGEND  = '#C0C0C0'   # background points in the legend
 
 EMBEDDINGS_INFO = [
     ('model_tsne', 'rec'),
@@ -64,21 +64,21 @@ EMBEDDINGS_INFO = [
 
 
 # =====================
-# 投影与标注
+# Projection and annotation
 # =====================
 
 def project_to_tsne(matrix, random_state=999):
-    """StandardScaler -> (维度 > 50 时先 PCA 到 50) -> t-SNE 2D。"""
+    """StandardScaler -> (PCA to 50 when dims > 50) -> t-SNE 2D."""
     scaled = StandardScaler().fit_transform(matrix)
     if scaled.shape[1] > 50:
-        print(f"   -> 维度为 {scaled.shape[1]}，先执行 PCA 降维至 50...")
+        print(f"   -> dims = {scaled.shape[1]}, running PCA to 50 first...")
         scaled = PCA(n_components=50, random_state=random_state).fit_transform(scaled)
     reducer = TSNE(n_components=2, random_state=random_state, init='pca', learning_rate='auto')
     return reducer.fit_transform(scaled)
 
 
 def add_latent_coords(df, h5_path, esm_h5_path, num_processes=8):
-    """读取模型/ESM embedding 并投影到 2D，写回 df（新增 *_tsne_1 / *_tsne_2）。"""
+    """Load model/ESM embeddings, project to 2D, and write back to df (adds *_tsne_1 / *_tsne_2)."""
     result_df, all_embeddings, all_esms, _, _ = get_check_df(
         h5_path=h5_path,
         esm_h5_path=esm_h5_path,
@@ -86,12 +86,12 @@ def add_latent_coords(df, h5_path, esm_h5_path, num_processes=8):
         num_processes=num_processes,
     )
 
-    print("⏳ 正在处理 Model Embeddings...")
+    print("Processing Model Embeddings...")
     emb_tsne = project_to_tsne(all_embeddings)
     result_df['model_tsne_1'] = emb_tsne[:, 0]
     result_df['model_tsne_2'] = emb_tsne[:, 1]
 
-    print("⏳ 正在处理 ESM Embeddings...")
+    print("Processing ESM Embeddings...")
     esm_tsne = project_to_tsne(all_esms)
     result_df['esm_tsne_1'] = esm_tsne[:, 0]
     result_df['esm_tsne_2'] = esm_tsne[:, 1]
@@ -100,7 +100,7 @@ def add_latent_coords(df, h5_path, esm_h5_path, num_processes=8):
 
 
 def add_experiment_label(df, labels, data_name):
-    """按实验验证标注给片段打标签 (1.0 = 成功，NaN = 背景)。"""
+    """Label segments by experimental validation (1.0 = positive, NaN = background)."""
     df['exp_label'] = np.nan
     success_ids = labels[data_name]['pos']
     df.loc[df['seg_key'].isin(success_ids), 'exp_label'] = 1.0
@@ -108,7 +108,7 @@ def add_experiment_label(df, labels, data_name):
 
 
 def add_cluster_label(df, cluster_tsv, top_k=10):
-    """按聚类结果给 seg_key 打簇标签（只标注成员数最多的前 top_k 个簇）。"""
+    """Label seg_key by cluster membership (only the top_k largest clusters)."""
     sorted_cluster_dict, _ = parse_cluster_tsv(cluster_tsv)
     top_clusters = list(sorted_cluster_dict.items())[:top_k]
 
@@ -123,11 +123,11 @@ def add_cluster_label(df, cluster_tsv, top_k=10):
 
 
 # =====================
-# 绘图公共底座
+# Shared plotting helpers
 # =====================
 
 def _iter_embeddings(df):
-    """按 (prefix, plot_name, dim1, dim2) 遍历两类 embedding，自动跳过缺失列。"""
+    """Iterate the two embedding kinds as (prefix, plot_name, dim1, dim2), skipping missing columns."""
     for prefix, plot_name in EMBEDDINGS_INFO:
         dim1, dim2 = f'{prefix}_1', f'{prefix}_2'
         if dim1 in df.columns and dim2 in df.columns:
@@ -135,7 +135,7 @@ def _iter_embeddings(df):
 
 
 def _draw_exp_stars(ax, df, dim1, dim2, s=200):
-    """图层：绘制实验验证点（红星）。"""
+    """Layer: draw experimentally validated points (red stars)."""
     mask = df["exp_label"] == 1.0
     if not mask.any():
         return
@@ -146,13 +146,13 @@ def _draw_exp_stars(ax, df, dim1, dim2, s=200):
 
 
 def _exp_proxy(markersize=18):
-    """实验验证点的图例代理。"""
+    """Legend proxy for experimentally validated points."""
     return mlines.Line2D([0], [0], marker='*', color='w',
                          markerfacecolor=COLOR_STAR, markeredgecolor='black', markersize=markersize)
 
 
 def _style_axis(ax, linewidth_spines=False):
-    """统一坐标轴样式。"""
+    """Shared axis styling."""
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     if linewidth_spines:
@@ -164,44 +164,44 @@ def _style_axis(ax, linewidth_spines=False):
 
 
 def _save_fig(fig, save_path):
-    """统一出图流程：tight_layout -> savefig -> close。"""
+    """Shared save routine: tight_layout -> savefig -> close."""
     plt.tight_layout()
     plt.savefig(save_path, format="png", bbox_inches='tight', pad_inches=0.02, dpi=600, facecolor='white')
     plt.close(fig)
 
 
 # =====================
-# 三张图
+# The three plots
 # =====================
 
 def plot_embeddings_color_by_cluster(df, save_dir, top_n_legends=3, figsize=(10, 6)):
     """
-    根据已有的 t-SNE 坐标，绘制并保存按聚类着色的 rec / esm 两张图。
+    Plot and save rec / esm scatter plots colored by cluster from the existing t-SNE coords.
 
     Args:
-        df: 包含模型/ESM t-SNE 坐标、实验标签和簇标签的 DataFrame
-        save_dir: 保存图片的文件夹路径
+        df: DataFrame with model/ESM t-SNE coords, experiment labels and cluster labels
+        save_dir: directory to save the figures
     """
     os.makedirs(save_dir, exist_ok=True)
 
-    # 无红色干扰的"安全高级调色板"（红色独家留给实验成功点）
+    # "safe" palette without red interference (red is reserved for the experimental positives)
     safe_colors = [
         '#1f77b4', '#ff7f0e', '#2ca02c', '#9467bd', '#8c564b',
         '#17becf', '#bcbd22', '#393b79', '#e6550d', '#31a354',
         '#7b4173', '#bd9e39', '#8c6d31', '#6b6ecf', '#b5cf6b'
     ]
 
-    # 按 "Cluster X" 中的数字排序，保证色彩连续
+    # sort by the number in "Cluster X" so colors stay contiguous
     unique_clusters = [c for c in df["cluster_label"].unique() if pd.notna(c)]
     try:
         unique_clusters = sorted(unique_clusters, key=lambda x: int(str(x).split(' ')[1]))
     except (IndexError, ValueError):
-        unique_clusters = sorted(unique_clusters)  # 降级为普通字母排序
+        unique_clusters = sorted(unique_clusters)  # fall back to plain string sort
 
     for prefix, plot_name, dim1, dim2 in _iter_embeddings(df):
         fig, ax = plt.subplots(figsize=figsize, dpi=600)
 
-        # 图层 1：灰色背景（既不在 Top-K 簇中，也不是实验成功点）
+        # Layer 1: gray background (neither in a Top-K cluster nor an experimental positive)
         mask_bg = df["cluster_label"].isna() & (df["exp_label"] != 1.0)
         ax.scatter(df.loc[mask_bg, dim1], df.loc[mask_bg, dim2],
                    c=COLOR_BG, s=5, alpha=0.4, label='_nolegend_', zorder=1)
@@ -213,8 +213,8 @@ def plot_embeddings_color_by_cluster(df, save_dir, top_n_legends=3, figsize=(10,
         legend_handles.append(bg_proxy)
         legend_labels.append('Background Candidates')
 
-        # 图层 2：Top K 簇（极简折叠图例）
-        other_top_handles = []  # 收集未能进入 Top N 的簇颜色
+        # Layer 2: Top-K clusters (collapsed legend)
+        other_top_handles = []  # collect colors of clusters that missed the Top N
         for i, cluster_name in enumerate(unique_clusters):
             mask_cluster = (df["cluster_label"] == cluster_name) & (df["exp_label"] != 1.0)
             cluster_data = df[mask_cluster]
@@ -224,13 +224,13 @@ def plot_embeddings_color_by_cluster(df, save_dir, top_n_legends=3, figsize=(10,
                        color=current_color, s=25, alpha=0.8, label="_nolegend_", zorder=2)
 
             if i < top_n_legends:
-                # VIP 席位：前 top_n_legends 个簇拥有独立图例
+                # VIP: the first top_n_legends clusters get their own legend entry
                 proxy_dot = mlines.Line2D([0], [0], marker='o', color='w',
                                           markerfacecolor=current_color, markersize=10)
                 legend_handles.append(proxy_dot)
                 legend_labels.append(f'{cluster_name}')
             elif len(other_top_handles) < 4:
-                # 合并席位：剩余簇颜色收进组合图例（最多 4 个防止过长）
+                # merged: remaining cluster colors go into a combined legend (max 4 to keep it short)
                 other_top_handles.append(
                     mlines.Line2D([0], [0], marker='o', color='w',
                                   markerfacecolor=current_color, markersize=8)
@@ -240,7 +240,7 @@ def plot_embeddings_color_by_cluster(df, save_dir, top_n_legends=3, figsize=(10,
             legend_handles.append(tuple(other_top_handles))
             legend_labels.append('Other Top Clusters')
 
-        # 图层 3：实验验证点（醒目红星）
+        # Layer 3: experimental positives (prominent red stars)
         _draw_exp_stars(ax, df, dim1, dim2, s=200)
         legend_handles.append(_exp_proxy())
         legend_labels.append('Exp Success')
@@ -261,11 +261,11 @@ def plot_embeddings_color_by_cluster(df, save_dir, top_n_legends=3, figsize=(10,
 
 
 def plot_embeddings_color_by_prob(df, hmm_df, save_dir, figsize=(10, 6)):
-    """按 HMM-HMM 比对概率着色的 t-SNE 图（rec / esm 两张）。"""
-    CMAP_PROB = 'mako_r'  # 概率渐变色带
+    """t-SNE scatter colored by HMM-HMM alignment probability (rec / esm)."""
+    CMAP_PROB = 'mako_r'  # probability colormap
     os.makedirs(save_dir, exist_ok=True)
 
-    # 合并概率（未比对上的置 0），再按概率从小到大排序
+    # merge probability (0 for unmatched), then sort ascending so high-prob points are drawn on top
     merged_df = pd.merge(df, hmm_df[['query', 'prob']],
                          left_on='seg_key', right_on='query', how='left')
     merged_df['prob'] = merged_df['prob'].fillna(0)
@@ -275,7 +275,7 @@ def plot_embeddings_color_by_prob(df, hmm_df, save_dir, figsize=(10, 6)):
     for prefix, plot_name, dim1, dim2 in _iter_embeddings(merged_df):
         fig, ax = plt.subplots(figsize=figsize, dpi=600)
 
-        # 图层 1：候选点（连续色带）
+        # Layer 1: candidates (continuous colormap)
         mask = merged_df['exp_label'] != 1.0
         scatter = ax.scatter(merged_df.loc[mask, dim1], merged_df.loc[mask, dim2],
                              c=merged_df.loc[mask, 'prob'],
@@ -286,7 +286,7 @@ def plot_embeddings_color_by_prob(df, hmm_df, save_dir, figsize=(10, 6)):
         cbar.set_label('Alignment Prob', fontweight='bold', labelpad=12)
         cbar.outline.set_visible(False)
 
-        # 图层 2：实验验证点（红星依然是主角）
+        # Layer 2: experimental positives (red stars remain the highlight)
         _draw_exp_stars(ax, merged_df, dim1, dim2, s=200)
 
         _style_axis(ax, linewidth_spines=True)
@@ -299,8 +299,8 @@ def plot_embeddings_color_by_prob(df, hmm_df, save_dir, figsize=(10, 6)):
 def plot_embeddings_color_by_species(df, species_df, save_dir, figsize=(10, 6),
                                      top_n_legends=3, bundle_n=4):
     """
-    按 Organism ID 着色的 t-SNE 图：前 3 个物种独立图例，随后 4 个打包，
-    其余灰色背景。
+    t-SNE scatter colored by Organism ID: first 3 species get individual legend entries, the next 4 are bundled,
+    and the rest are gray background.
     """
     safe_colors = [
         '#4C72B0', '#DD8452', '#55A868', '#C44E52', '#8172B3',
@@ -309,7 +309,7 @@ def plot_embeddings_color_by_species(df, species_df, save_dir, figsize=(10, 6),
     ]
     os.makedirs(save_dir, exist_ok=True)
 
-    # 数据对齐与合并
+    # Data alignment and merge
     if 'acc' not in df.columns:
         df = df.copy()
         df['acc'] = df['seg_key'].apply(lambda x: x.split('_')[0])
@@ -328,7 +328,7 @@ def plot_embeddings_color_by_species(df, species_df, save_dir, figsize=(10, 6),
     merged_df = merged_df.copy()
     merged_df['Organism (ID)'] = merged_df['Organism (ID)'].apply(clean_species_id)
 
-    # 需要高亮的物种总数 (top_n_legends + bundle_n)
+    # total species to highlight (top_n_legends + bundle_n)
     total_top = top_n_legends + bundle_n
     species_counts = merged_df[merged_df['Organism (ID)'] != 'Unknown']['Organism (ID)'].value_counts()
     top_species_list = species_counts.index[:total_top].tolist()
@@ -340,7 +340,7 @@ def plot_embeddings_color_by_species(df, species_df, save_dir, figsize=(10, 6),
         legend_handles = []
         legend_labels = []
 
-        # 图层 1：背景（Other Species & Unknown）
+        # Layer 1: background (Other Species & Unknown)
         mask_bg = (~merged_df['Organism (ID)'].isin(top_species_list)) & (merged_df['exp_label'] != 1.0)
         ax.scatter(merged_df.loc[mask_bg, dim1], merged_df.loc[mask_bg, dim2],
                    c=COLOR_BG, s=5, alpha=0.25, label='_nolegend_', zorder=1)
@@ -350,7 +350,7 @@ def plot_embeddings_color_by_species(df, species_df, save_dir, figsize=(10, 6),
         legend_handles.append(bg_proxy)
         legend_labels.append('Other Species (Bg)')
 
-        # 中间层：Other Top Species
+        # Middle layer: Other Top Species
         other_top_handles = []
         for i, species_id in enumerate(other_top_species):
             mask = (merged_df['Organism (ID)'] == species_id) & (merged_df['exp_label'] != 1.0)
@@ -369,7 +369,7 @@ def plot_embeddings_color_by_species(df, species_df, save_dir, figsize=(10, 6),
             legend_handles.append(tuple(other_top_handles))
             legend_labels.append('Other Top Species')
 
-        # VIP 物种层（从丰度最大的开始画）
+        # VIP species layer (draw most abundant first)
         vip_to_plot = sorted(vip_species, key=lambda s: species_counts[s], reverse=True)
         vip_proxies = {}
         for species_id in vip_to_plot:
@@ -391,7 +391,7 @@ def plot_embeddings_color_by_species(df, species_df, save_dir, figsize=(10, 6),
             legend_handles.insert(1 + i, proxy_dot)
             legend_labels.insert(1 + i, label_text)
 
-        # 实验验证点
+        # Experimental positives
         _draw_exp_stars(ax, merged_df, dim1, dim2, s=300)
         legend_handles.append(_exp_proxy())
         legend_labels.append('Exp Success')
@@ -412,13 +412,13 @@ def plot_embeddings_color_by_species(df, species_df, save_dir, figsize=(10, 6),
 
 
 # =====================
-# 主流程
+# Main flow
 # =====================
 
 def run(data_name):
     data_save_path = DATA_SAVE_FP_DICT['data_save_path'][data_name]
     picture_save_path = DATA_SAVE_FP_DICT['picture_save_path'][data_name]
-    emb_save_path = os.path.join(picture_save_path, "or_filter_emb_tsne_2d")
+    emb_save_path = os.path.join(picture_save_path, "emb_tsne_2d")
     os.makedirs(emb_save_path, exist_ok=True)
 
     fasta_dir = os.path.join(data_save_path, "fasta_dir")
@@ -426,7 +426,7 @@ def run(data_name):
 
     labels = load_experiment_labels()
 
-    # --- 投影（带缓存，避免每次重跑 t-SNE） ---
+    # --- Projection (cached to avoid re-running t-SNE) ---
     tsne_tsv = os.path.join(data_save_path, "high_conf_with_tsne.tsv")
     if os.path.exists(tsne_tsv):
         df = pd.read_csv(tsne_tsv, sep="\t")
@@ -440,12 +440,12 @@ def run(data_name):
         df = add_experiment_label(df, labels, data_name)
         df.to_csv(tsne_tsv, sep="\t", index=False)
 
-    # --- 聚类标签（依赖 fasta 聚类结果，每次现算） ---
-    fasta_file = Path(os.path.join(fasta_dir, "or_filter_seg_seq.fasta")).resolve()
+    # --- Cluster labels (depends on FASTA clustering, recomputed each run) ---
+    fasta_file = Path(os.path.join(fasta_dir, "high_conf_seg_seq.fasta")).resolve()
     cluster_tsv = os.path.join(fasta_file.parent, f"{fasta_file.stem}_cluster_result", "clusterRes_cluster.tsv")
     df = add_cluster_label(df, cluster_tsv)
 
-    # --- 绘图 ---
+    # --- Plots ---
     plot_embeddings_color_by_cluster(df, save_dir=emb_save_path)
 
     hmm_df_fp = os.path.join(data_save_path, "hhm_dir", "align_best_prob.tsv")

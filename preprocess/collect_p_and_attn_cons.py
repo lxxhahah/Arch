@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 def compute_ppmi_score(attention_matrix):
     """
-    基于 PPMI (Positive Pointwise Mutual Information) 的评分算法
+    PPMI (Positive Pointwise Mutual Information) based scoring
     Softmax -> Lift -> Log -> ReLU
     """
     # attention_matrix: [num_heads, seq_len] --------- raw score
@@ -21,124 +21,115 @@ def compute_ppmi_score(attention_matrix):
     # 1. Softmax
     attn_tensor = torch.tensor(attention_matrix)
     probs = F.softmax(attn_tensor, dim=-1)
-    # 2. compute Lift (相对于随机分布 1/L 的倍数) --- y * len(seq)
+    # 2. compute Lift (multiple of the random distribution 1/L) --- y * len(seq)
     lift = probs * seq_len
-    # 3. Log 变换 (计算信息量)
-    # 加一个极小值防止 log(0)
+    # 3. Log transform (information content)
+    # add a tiny constant to avoid log(0)
     log_lift = torch.log(lift + 1e-9)
-    # 4. ReLU 截断 (只保留高于随机水平的信号)
+    # 4. ReLU truncation (keep only signal above the random level)
     ppmi_matrix = F.relu(log_lift)
     return ppmi_matrix.numpy()
 
 
-def compute_binary_z_score(attention_matrix, start, end, top_percent=30):
+def compute_consensus_ratio(attention_matrix, start, end, top_percent=30):
     """
-    保留二值化逻辑，引入全长背景 Z-Score
-    attention_matrix: ppmi_score
+    Compute the segment's consensus ratio: the mean fraction of heads whose PPMI
+    exceeds a per-head threshold at the segment positions (range 0-1).
+    attention_matrix: ppmi_score, shape [num_heads, seq_len]
     """
     num_heads, seq_len = attention_matrix.shape
 
-    # 1. 计算每个头的阈值 -----------基于全长计算的，代表了每个 Head 的活跃标准
+    # 1. per-head threshold, computed over the full length; represents each head's activation level
     raw_thresholds = np.percentile(attention_matrix, 100 - top_percent, axis=1)  # [num_heads]
     thresholds = np.maximum(raw_thresholds, 1e-6)
 
-    # 2. 对全长矩阵进行二值化--------shape: [num_heads, seq_len]
+    # 2. binarize the full-length matrix --- shape: [num_heads, seq_len]
     full_mask = (attention_matrix > thresholds[:, None]).astype(int)
 
-    # 3. 计算全长每个位置的共识率-------axis=0 表示跨 Head 求和/平均-----------shape: [seq_len]
+    # 3. consensus rate at each position --- axis=0 averages over heads --- shape: [seq_len]
     global_consensus_vector = np.mean(full_mask, axis=0)
 
-    # 4. 提取片段的得分
+    # 4. mean consensus rate over the segment
     segment_ratios = global_consensus_vector[start:end + 1]
-    segment_score = np.mean(segment_ratios)
-
-    # 5. 计算 Z-Score(exclude segment itself)
-    bg_mask = np.ones(seq_len, dtype=bool)
-    bg_mask[start:end + 1] = False
-    bg_values = global_consensus_vector[bg_mask]
-
-    if len(bg_values) > 0:
-        bg_mu = np.mean(bg_values)
-        bg_std = np.std(bg_values) + 1e-9
-        z_score = (segment_score - bg_mu) / bg_std
-    else:
-        z_score = 0
-
-    return z_score, segment_score
+    return float(np.mean(segment_ratios))
 
 
-def get_valid_seg(start, end, seg_sequence, seg, all_sequence):
+def get_valid_seg(start, end, seg, all_sequence):
+    """Clip a segment's end to the truncated full length and return the coordinate string."""
+    if end >= len(all_sequence):
+        return f"{start}_{len(all_sequence) - 1}"
+    return seg
+
+
+_worker_state = {}
+
+
+def _init_worker(rec_h5_path, esm_h5_path, attn_h5_path):
+    """Open the three HDF5 files once per worker process (passed to Pool initializer)."""
+    _worker_state["rec"] = h5py.File(rec_h5_path, 'r', libver='latest', swmr=True)
+    _worker_state["esm"] = h5py.File(esm_h5_path, 'r', libver='latest', swmr=True)
+    _worker_state["attn"] = h5py.File(attn_h5_path, 'r', libver='latest', swmr=True)
+
+
+def process_accession(acc):
     """
-    校验 segment 是否越界，越界则裁剪。
-    若片段序列长度与实际区间不一致，且 end 超出截断后的全长，则把 end 修正为 len(all_sequence)-1。
+    Process a single accession and return (acc, records, error) for all of its segments.
+    HDF5 files are opened once per worker by _init_worker and stored in _worker_state.
+    each record: acc / seg / valid_seg / prob / consensus_ratio
     """
-    valid_seg = seg
-    if len(seg_sequence) != int(end - start + 1):
-        if end >= len(all_sequence):
-            valid_seg = f"{start}_{len(all_sequence) - 1}"
-        else:
-            print(f"[{seg}] length mismatch but end < full len {len(all_sequence)}, keep original")
-    return valid_seg
-
-
-def process_accession(args):
-    """
-    处理单个 accession，返回该 accession 下所有 segment 的记录。
-    args: (acc, rec_h5_path, esm_h5_path, attn_h5_path)
-    每条记录: acc / seg / valid_seg / prob / consensus_ratio
-    """
-    acc, rec_h5_path, esm_h5_path, attn_h5_path = args
+    f = _worker_state["rec"]
+    esm_file = _worker_state["esm"]
+    attn_file = _worker_state["attn"]
     records = []
     try:
-        with h5py.File(rec_h5_path, 'r', libver='latest', swmr=True) as f, \
-             h5py.File(esm_h5_path, 'r', libver='latest', swmr=True) as esm_file, \
-             h5py.File(attn_h5_path, 'r', libver='latest', swmr=True) as attn_file:
+        if not (acc in f and acc in esm_file):
+            return acc, records, None
 
-            if not (acc in f and acc in esm_file):
-                return records
+        # full-length sequence (truncated to 1022, matching the attention matrix seq_len)
+        raw_all_sequence = esm_file[acc]['sequence'][()].decode('utf-8')
+        all_sequence = raw_all_sequence[:1022]
+        seq_len = len(all_sequence)
 
-            # 全长序列(截断到 1022，与 attention matrix 的 seq_len 一致)
-            raw_all_sequence = esm_file[acc]['sequence'][()].decode('utf-8')
-            all_sequence = raw_all_sequence[:1022]
+        # attention matrix -> PPMI, computed once per accession
+        ppmi_matrix = None
+        attn_group = attn_file.get(acc)
+        if attn_group is not None and 'select_attention_matrix' in attn_group:
+            ppmi_matrix = compute_ppmi_score(attn_group['select_attention_matrix'][:])
 
-            # attention matrix -> PPMI，每个 acc 只算一次
-            ppmi_matrix = None
-            attn_group = attn_file.get(acc)
-            if attn_group is not None and 'select_attention_matrix' in attn_group:
-                ppmi_matrix = compute_ppmi_score(attn_group['select_attention_matrix'][:])
+        for seg in f[acc].keys():
+            start, end = map(int, f[acc][seg]['segment'][:])
+            prob = float(f[acc][seg]['probability'][()])
 
-            for seg in f[acc].keys():
-                start, end = map(int, f[acc][seg]['segment'][:])
-                seg_sequence = f[acc][seg]['sequence'][()].decode('utf-8')
-                prob = float(f[acc][seg]['probability'][()])
+            valid_seg = get_valid_seg(start, end, seg, all_sequence)
 
-                valid_seg = get_valid_seg(start, end, seg_sequence, seg, all_sequence)
-
-                consensus_ratio = None
-                if ppmi_matrix is not None:
+            consensus_ratio = None
+            if ppmi_matrix is not None:
+                if ppmi_matrix.shape[1] != seq_len:
+                    print(f"[{acc}] attention len {ppmi_matrix.shape[1]} != sequence len {seq_len}, skip consensus")
+                else:
                     vs, ve = map(int, valid_seg.split("_"))
-                    seq_len = ppmi_matrix.shape[1]
-                    
                     if vs < seq_len:
                         ve = min(ve, seq_len - 1)
-                        _, consensus_ratio = compute_binary_z_score(ppmi_matrix, vs, ve)
+                        consensus_ratio = compute_consensus_ratio(ppmi_matrix, vs, ve)
 
-                records.append({
-                    'acc': acc,
-                    'seg': seg,
-                    'valid_seg': valid_seg,
-                    'prob': prob,
-                    'consensus_ratio': consensus_ratio,
-                })
+            records.append({
+                'acc': acc,
+                'seg': seg,
+                'valid_seg': valid_seg,
+                'prob': prob,
+                'consensus_ratio': consensus_ratio,
+            })
     except Exception as e:
-        print(f"process {acc} occur error: {e}")
-    return records
+        return acc, [], f"{type(e).__name__}: {e}"
+    return acc, records, None
 
 
 def build_result_tsv(rec_h5_path, esm_h5_path, attn_h5_path,
                      output_tsv, data_idx_fp=None, num_processes=8):
     """
-    一次性产出包含 acc / seg / valid_seg / prob / consensus_ratio 的 TSV。
+    Produce a TSV with acc / seg / valid_seg / prob / consensus_ratio in one pass.
+    Failed accessions are written to a sidecar .failed.tsv and reported; raises if
+    every accession fails.
     """
     if data_idx_fp is not None and os.path.exists(data_idx_fp):
         with open(data_idx_fp, "r") as f:
@@ -147,15 +138,35 @@ def build_result_tsv(rec_h5_path, esm_h5_path, attn_h5_path,
         with h5py.File(rec_h5_path, 'r') as f:
             accessions = list(f.keys())
 
-    tasks = [(acc, rec_h5_path, esm_h5_path, attn_h5_path) for acc in accessions]
-
     all_records = []
-    with Pool(processes=num_processes) as pool:
-        for records in tqdm(
-            pool.imap_unordered(process_accession, tasks, chunksize=16),
-            total=len(tasks), desc="Collecting",
+    failures = []
+    with Pool(
+        processes=num_processes,
+        initializer=_init_worker,
+        initargs=(rec_h5_path, esm_h5_path, attn_h5_path),
+    ) as pool:
+        for acc, records, err in tqdm(
+            pool.imap_unordered(process_accession, accessions, chunksize=16),
+            total=len(accessions), desc="Collecting",
         ):
-            all_records.extend(records)
+            if err is not None:
+                failures.append((acc, err))
+            else:
+                all_records.extend(records)
+
+    if len(failures) == len(accessions):
+        raise RuntimeError(
+            f"all {len(accessions)} accessions failed; check the input HDF5 paths and keys"
+        )
+    if failures:
+        failed_fp = os.path.splitext(output_tsv)[0] + ".failed.tsv"
+        with open(failed_fp, "w") as f:
+            f.write("acc\terror\n")
+            for acc, err in failures:
+                f.write(f"{acc}\t{err}\n")
+        print(f"WARNING: {len(failures)}/{len(accessions)} accessions failed, written to {failed_fp}")
+        for acc, err in failures[:10]:
+            print(f"  - {acc}: {err}")
 
     df = pd.DataFrame(all_records, columns=["acc", "seg", "valid_seg", "prob", "consensus_ratio"])
     df = df.sort_values(["acc", "seg"]).reset_index(drop=True)
@@ -165,10 +176,10 @@ def build_result_tsv(rec_h5_path, esm_h5_path, attn_h5_path,
 
 
 if __name__ == "__main__":
-    rec_h5_path = "/path/to/output/all_result_dict.h5"   # Recommendation_system 输出
-    esm_h5_path = "/path/to/output/all_esm1b_dict.h5"    # ESM 特征
-    attn_h5_path = "/path/to/output/all_attn_dict.h5"    # A2KA 注意力输出
-    data_idx_fp = "/path/to/output/all_acc.idx"          # accession 索引(可选)
+    rec_h5_path = "/path/to/output/all_result_dict.h5"   # output of the Recommendation_system
+    esm_h5_path = "/path/to/output/all_esm1b_dict.h5"    # ESM features
+    attn_h5_path = "/path/to/output/all_attn_dict.h5"    # A2KA attention output
+    data_idx_fp = "/path/to/output/all_acc.idx"          # accession index (optional)
     output_tsv = "/path/to/output/all_result.tsv"
 
     build_result_tsv(

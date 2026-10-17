@@ -13,19 +13,19 @@ warnings.filterwarnings("ignore")
 
 def random_stretch(segg, set_len, max_len):
     """
-        随机扩展或收缩区间至目标长度set_len, 同时确保不超出序列总长度
-        segg: 原始区间 (start, end)
-        set_len: 目标长度
+        Randomly expand or shrink the interval to target length set_len while staying within the sequence length
+        segg: original interval (start, end)
+        set_len: target length
         max_len: 
     """
-    # 检查第一种情况：set_len 大于 max_len
+    # case 1: set_len exceeds max_len
     if set_len > max_len:
         set_len = max_len
     
     fis = segg[0]
     then = segg[1]
     
-    # 检查第二种情况：segg 初始区间的长度已经等于或大于 set_len
+    # case 2: the initial interval is already >= set_len
     if then - fis >= set_len:
         return (0, max_len)
     
@@ -41,7 +41,7 @@ def random_stretch(segg, set_len, max_len):
 
 def filter_single(pre_seg):
     """
-        过滤掉长度为1的单个位点片段, 只保留长度≥2的区间
+        Drop single-residue fragments of length 1, keeping only intervals of length >= 2
         pre_seg: [(1,5), (3,3), (7,9)]
     """
     pre_seg_without_single = []
@@ -53,7 +53,7 @@ def filter_single(pre_seg):
 
 def merge_intervals(intervals):
     """
-        合并重叠或邻近(距离≤1)的区间
+        Merge overlapping or adjacent (distance <= 1) intervals
         intervals: [(1,3), (2,4), (6,7)]
     """
     merge_dis = 1
@@ -61,15 +61,15 @@ def merge_intervals(intervals):
     if not intervals:
         return []
 
-    # 起始位置排序
+    # sort by start position
     intervals.sort(key=lambda x: x[0])
 
     merged = [intervals[0]]
     for current in intervals[1:]:
         previous = merged[-1]
-        # 检查是否有重合或距离小于1
+        # check for overlap or distance < 1
         if current[0] <= previous[1] + merge_dis:
-            # 融合片段
+            # merge fragments
             merged[-1] = (previous[0], max(previous[1], current[1]))
         else:
             merged.append(current)
@@ -80,11 +80,11 @@ def merge_intervals(intervals):
 def generate_segments(sequence_attention, cofactor, set_len, f_c, seqlen, stret_choose):
     """ 
         sequence_attention: 
-        cofactor: 0.3 控制提取关键位置的比例
-        set_len: 5 最小片段长度阈值
-        f_c: 是否过滤单点位（"f"表示过滤, "n")
-        seqlen: 原始序列长度
-        stret_choose: 是否启用随机扩展（"s"表示启用, "n")
+        cofactor: 0.3 controls the fraction of key positions extracted
+        set_len: 5 minimum segment length threshold
+        f_c: whether to filter single-residue points ("f" filter, "n" no)
+        seqlen: original sequence length
+        stret_choose: whether to enable random stretch ("s" enable, "n" no)
     """
     y = F.softmax(torch.tensor(sequence_attention).reshape(-1)).cpu().numpy()
     p_y = np.log(300 * y)
@@ -105,15 +105,15 @@ def generate_segments(sequence_attention, cofactor, set_len, f_c, seqlen, stret_
             begin = top_residues[i+1]
     prepred_seg.append((begin, top_residues[-1]))
     # prepred_seg is a list, (start, end)
-    #选择是否过滤掉单个位点  
+    #choose whether to filter single-residue points  
     if f_c == "f":
         prepred_seg = filter_single(prepred_seg)
 
-    # 片段长度补齐
+    # pad segment length
     pred_seg = []
-    # 选择是否有补齐机制
+    # choose whether padding is enabled
     if set_len > 2:  # 3
-        #在最短长度的基础上根据采样系数随机延长
+        #randomly extend from the minimum length by the sampling factor
         add_len = random.choices([0,1,2], [0.5,0.3,0.2])[0]
         set_len = set_len + add_len
         for seg in prepred_seg:
@@ -121,7 +121,7 @@ def generate_segments(sequence_attention, cofactor, set_len, f_c, seqlen, stret_
                 pred_seg.append(random_stretch(seg, set_len, seqlen))
             else:
                 pred_seg.append(seg)
-    # 随机扩展增强
+    # random-stretch augmentation
     if stret_choose == "s":
         st_li = []
         for seg in pred_seg:
@@ -153,7 +153,7 @@ class KSG:
 
    
     def _process_single(self, key):
-        """线程安全的单任务处理"""
+        """Thread-safe single-task processing."""
         with h5py.File(self.h5_path, "r") as f:
             attn = np.array(f[key]['select_attention'][:])
             seqlen = len(f[key]['sequence'][()])
@@ -168,20 +168,20 @@ class KSG:
 
     def parallel_generate(self, save_h5_fp, batch_sie=1024):
         """
-        返回: {key: [(start1,end1), ...]}
+        Returns: {key: [(start1,end1), ...]}
         """
 
-        ctx = mp.get_context('spawn')  # 更安全的进程启动方式
+        ctx = mp.get_context('spawn')  # safer process start method
         with ctx.Pool(processes=self.n) as pool:
             results = list(tqdm(
-                pool.imap_unordered(self._process_single, self.keys, chunksize=max(1, len(self.keys)//(self.n*4))),  # 每个进程一次处理多个key, 减少通信
+                pool.imap_unordered(self._process_single, self.keys, chunksize=max(1, len(self.keys)//(self.n*4))),  # each process handles multiple keys at once to reduce communication
                 total=len(self.keys),
                 desc="Generating segments"
             ))
             
            
                 
-        # deal with results # 分批写入HDF5
+        # deal with results # write to HDF5 in batches
         with h5py.File(save_h5_fp, 'w') as hf:
 
             hf.attrs.update({
@@ -189,7 +189,7 @@ class KSG:
                 **self.params
             })
            
-            # 分批写入
+            # write in batches
             batch = {}
             for i, (key, segs) in enumerate(results):
                 batch[key] = segs

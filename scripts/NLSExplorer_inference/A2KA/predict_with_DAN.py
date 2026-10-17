@@ -19,15 +19,15 @@ def get_distribu_with_select_batch(model, embedding, mode='sum'):
         embedding = list(embedding) + [torch.randn(1022, 1280)]
         embedding = pad_sequence(embedding, batch_first=True).cuda().float()[:-1,:,:] # (bz, 1022, 1280)
 
-    参数:
-        return attn_dis(每一层聚合的注意力分数直接相加), combined(选择特定头的注意力分数相加)
+    Args:
+        return attn_dis(per-layer aggregated attention scores summed), combined(selected heads' attention scores summed)
         embedding: assume that (bz, 1022, 1280)
-        select_li: 头选择模板 [num_layers, num_heads] (0/1矩阵)
-        mode: 融合模式 ('mean'或'sum')
+        select_li: head selection template [num_layers, num_heads] (0/1 matrix)
+        mode: fusion mode ('mean' or 'sum')
     """
 
-    # 选择模板加载, select_li是一个嵌套列表, 形状为 [16, 64]
-    # 每个元素为0或1, 1表示保留该头的注意力结果
+    # load the selection template; select_li is a nested list of shape [16, 64]
+    # each element is 0 or 1; 1 means keep that head's attention
     f_read = open("../checkpoint/per80_select_li.pkl", 'rb')
     select_li = pickle.load(f_read)
     f_read.close()
@@ -36,14 +36,14 @@ def get_distribu_with_select_batch(model, embedding, mode='sum'):
     with torch.no_grad():
         model.eval()
         # P, attention_dis, total_attention_store, final_att 
-        # 其中all_heads[layer_idx][head_idx] 形状为 [batch_size, seq_len, 1]
+        # where all_heads[layer_idx][head_idx] has shape [batch_size, seq_len, 1]
         dan_prob, att_dis, all_heads, _ = model(embedding)   
         dan_prob = dan_prob.squeeze(-1).cpu().detach().numpy()  # [bz, ]
 
         # att_dis is a list, each element store each layer responding to combined attention score
         # all_heads
         batch_size, seq_len = embedding.shape[0], embedding.shape[1]
-        # 存储每个被选中的头的注意力
+        # store the attention of each selected head
         selected_heads_att = []
         combined = torch.zeros(batch_size, seq_len).cuda()
         selected_counts = 0
@@ -70,7 +70,7 @@ def get_distribu_with_select_batch(model, embedding, mode='sum'):
 
 
 class H5SequenceDataset(Dataset):
-    """内存映射方式高效读取HDF5"""
+    """Memory-mapped HDF5 reader."""
     def __init__(self, h5_path, data_idx_fp, batch_size=1024):
         """
             data_idx_fp: get protein accession(keys)
@@ -112,7 +112,7 @@ def collate_fn(batch):
 
     
 def optimized_reader(h5_path, data_idx_fp, batch_size, num_workers=4):
-    """并行数据加载器"""
+    """Parallel data loader."""
     dataset = H5SequenceDataset(h5_path, data_idx_fp, batch_size)
     print("load dataset")
     return DataLoader(
@@ -151,7 +151,7 @@ def process_large_h5(esm_h5_path, data_idx_fp, attn_h5_path, batch_size, device,
             # shape: [bz, max_len], [bz, max_len], [bz, num_selected_heads, max_len]
             batch_dan_prob, batch_attn, batch_select_combined, batch_select_heads_att = get_distribu_with_select_batch(model, batch_emb)
 
-        # 批量写入结果
+        # write results in batches
         with h5py.File(attn_h5_path, 'a', libver='latest') as attn_file:
             for acc, seq, dan_prob, attn, combined, select_heads_attn in zip(
                 batch_acc,

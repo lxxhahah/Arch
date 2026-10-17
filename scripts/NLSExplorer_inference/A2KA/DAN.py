@@ -18,14 +18,14 @@ class Attention(nn.Module):
         """
             embding: [bz, seq_len, 1280]
             return:
-                    sum_:  [bz, 1280] (整体表征)
-                    att_rate: 注意力分布图
+                    sum_:  [bz, 1280] (overall representation)
+                    att_rate: attention distribution map
         """
         rate_matrix = self.atten_Matrix(embding) # [bz, seq_len, 1]
         rate_matrix = self.relu(rate_matrix)
         # norm-----
         att_rate = F.softmax(rate_matrix,dim=1) # [bz, seq_len, 1]
-        # 加权求和并缩放
+        # weighted sum and scale
         lll= rate_matrix.size()[1] 
         sum_ = (embding*att_rate).sum(1)/math.sqrt(lll) # [bz, 1280]
         # len_emb = self.ll(torch.tensor(lenttth).cuda()).unsqueeze(0)
@@ -36,10 +36,10 @@ class Attention(nn.Module):
 
 class LSTMTagger(nn.Module):
     """
-        P: 输出概率预测 
+        P: output probability prediction 
         attention_dis: store each layer summary attn_dist
-        total_attention_store: 每个头的: each element is also a list---- a single layer coresponding all attention_distribution
-        final_att: 最终综合attention
+        total_attention_store: per-head: each element is also a list---- a single layer coresponding all attention_distribution
+        final_att: final combined attention
     """
     def __init__(self, embedding_dim, hidden_dim):
         super(LSTMTagger, self).__init__()
@@ -61,7 +61,7 @@ class LSTMTagger(nn.Module):
         self.Att_li = nn.ModuleList(Att_li)    
         self.AAt = Attention(real_dim)
         
-        # 压缩得到的vec维度
+        # reduce the vector dimension
         pro_li = []
         for fig in self.Att_config:
             sub_li = []
@@ -72,30 +72,30 @@ class LSTMTagger(nn.Module):
             pro_li.append(nn.ModuleList(sub_li))
         self.pro_li = nn.ModuleList(pro_li)    
         
-        # 用于将综合好的embedding投影到高维以方便产生乘积
+        # project the combined embedding to a higher dim to facilitate products
         project_li = []
         for i in range(len(self.Att_config)):
             project_li.append(nn.Linear(1,real_dim))
         self.project_li = nn.ModuleList(project_li)
                 
-        #线性变换填充维度
+        #linear transform to fill dimensions
         project_li = []
         for i in range(len(self.Att_config)):
             project_li.append(nn.Linear(real_dim,real_dim))
         self.FI_li = nn.ModuleList(project_li)
 
-        #压缩一下避免爆炸
+        #compress to avoid explosion
         set_dim = int(real_dim/4)
         project_li = []
         for i in range(len(self.Att_config)):
             project_li.append(nn.Linear(real_dim,set_dim))
         self.Set_li = nn.ModuleList(project_li)
        
-        #最后投影到概率上面去
+        #finally project to the probability
         length = (len(self.Att_config))*set_dim+real_dim
         self.hidden2p = nn.Linear(length,1)
 
-        #norm 层
+        #norm layer
         norm_li = []
         for i in range(len(self.Att_config)):
             norm_li.append(nn.LayerNorm(real_dim))
@@ -105,12 +105,12 @@ class LSTMTagger(nn.Module):
         batch_size = (embding.size()[0])
         vec_store = [] # store each layer summary feature
         t_emb = embding
-        #储存一开始的emb_
+        #store the initial emb_
         origin_emb = t_emb
         attention_dis = [] # store each layer summary attn_dist
 
-        #需要把每个单元的注意力模式都提取出来
-        #先进行提取，其余的我们之后再进行处理
+        #extract each unit's attention pattern
+        #extract first; the rest is handled later
         total_attention_store = [] # each element is also a list---- a single layer attention_distribution
 
         for i,fig in enumerate(self.Att_config): # process single layer(64 BAU)
@@ -128,33 +128,33 @@ class LSTMTagger(nn.Module):
             sum_att = att_s.sum(0).unsqueeze(2)
             # store each layer summary attn_dist
             attention_dis.append(att_s.sum(0).unsqueeze(2))
-            # 生成下一层的embedding
+            # produce the next layer's embedding
             sum_att = self.project_li[i](sum_att)
             t_emb = (t_emb*sum_att)+t_emb
             t_emb = self.norm_li[i](t_emb)
 
-            #压缩当前层特征
+            #compress the current layer features
             vec_s =  torch.stack(vec_s)
             vec_s = vec_s.transpose(0,1)
 
-            #下面是生成每个层的total_embedding方法
+            #below is the method for generating each layer's total_embedding
             z = vec_s
             z = z.permute(0,2,1)
             batch = z.size()[0]
             output = z.reshape(batch,-1)
-            #线性变换后填充维度
+            #linear transform then fill dimensions
             output = F.relu(self.FI_li[i](output))+output
             output = F.relu(self.Set_li[i](output))
             vec_store.append(output)
             
-        # 拼接所有层的压缩特征
+        # concatenate compressed features of all layers
         ott = torch.stack(vec_store).transpose(0,1).reshape(batch_size,-1)
-        # 计算最终注意力与聚合特征
+        # compute final attention and aggregated feature
         sum_, final_att = self.AAt(t_emb)
-        # 合并所有特征
+        # merge all features
         um_ = torch.cat((sum_,ott),1)       
         um_ = self.dropout(um_)  
-        # 输出概率预测  
+        # output probability prediction  
         P = torch.sigmoid(self.hidden2p(um_)) # [batch, 1]
       
         return P, attention_dis, total_attention_store, final_att   

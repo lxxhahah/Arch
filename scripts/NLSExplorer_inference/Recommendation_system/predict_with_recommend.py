@@ -13,7 +13,7 @@ import os
 import sys
 
 class H5SequenceDataset(Dataset):
-    """内存映射方式高效读取HDF5"""
+    """Memory-mapped HDF5 reader."""
     def __init__(self, emb_seq_path, pre_seg_path, keys):
         self.emb_seq_path = emb_seq_path
         self.pre_seg_path = pre_seg_path
@@ -45,13 +45,13 @@ class SegmentPredictor:
     def __init__(self, model, device, max_workers):
         self.device = device
         self.model = model.to(device).eval()
-        # 添加CUDA同步
+        # add CUDA synchronization
         torch.cuda.synchronize(device)
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
 
 
     def predict_single(self, acc, emb, seg, seq):
-        """单个蛋白质的预测"""
+        """Predict segments for a single protein."""
         with torch.no_grad(), torch.cuda.device(self.device):
             emb = emb.unsqueeze(0).to(self.device, non_blocking = True)  # (1, seq_len, 1280)
             pre, emb_li = self.model(emb, [seg])  # pre: (1, num_seg)
@@ -80,7 +80,7 @@ class SegmentPredictor:
             fut = self.executor.submit(self.predict_single, acc, emb, seg, seq)
             futures.append(fut)
         
-        # 等待并返回结果
+        # wait and return the results
         return [f.result() for f in futures]
       
 def process_all(model, device, emb_seq_h5, pre_seg_h5, output_h5_path, keys,
